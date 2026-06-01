@@ -402,7 +402,7 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       {/* Usage hints — fade out once a node is selected */}
       {!selectedNode && (
         <div className="absolute top-4 right-4 text-gray-600 text-xs text-right pointer-events-none select-none leading-relaxed">
-          <p>Click node to expand · Right-click for options</p>
+          <p>Click artist to expand · Right-click any node for options</p>
           <p>Drag node to reposition · ⟳ to re-run layout</p>
           <p>Scroll to zoom · Drag canvas to pan · ⌘K to search</p>
         </div>

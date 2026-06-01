@@ -172,11 +172,19 @@ export function App() {
 
   // ----------------------------------------------------------------
   // Node clicked in the graph
+  //
+  // Only Artist nodes auto-expand — clicking an artist reveals their
+  // albums and any band / related-artist nodes (the 1-hop neighbourhood).
+  // Albums, tracks and labels are select-only so the graph doesn't
+  // cascade into every song automatically; expand them deliberately via
+  // the detail panel or right-click → Expand.
   // ----------------------------------------------------------------
   const handleNodeClick = useCallback((nodeId: string, nodeType: NodeType) => {
     setSelectedNode(nodeId)
     setContextMenu(null)
-    expandRef.current?.(nodeId, nodeType)
+    if (nodeType === 'Artist') {
+      expandRef.current?.(nodeId, nodeType)
+    }
   }, [])
 
   // ----------------------------------------------------------------
@@ -347,7 +355,10 @@ export function App() {
             nodeType={contextMenu.nodeType}
             nodeLabel={contextMenu.nodeLabel}
             onExpand={() => {
-              handleNodeClick(contextMenu.nodeId, contextMenu.nodeType)
+              // Explicit expand works for every node type (unlike a plain
+              // click, which only auto-expands Artists).
+              setSelectedNode(contextMenu.nodeId)
+              expandRef.current?.(contextMenu.nodeId, contextMenu.nodeType)
             }}
             onFocus={() => setSelectedNode(contextMenu.nodeId)}
             onHide={() => setHiddenNodes((prev) => new Set([...prev, contextMenu.nodeId]))}
@@ -361,8 +372,9 @@ export function App() {
         <CommandPalette
           graph={graphData}
           onSelect={(nodeId, nodeType) => {
+            // Mirror click behaviour: jump to the node, auto-expand only Artists.
             setSelectedNode(nodeId)
-            expandRef.current?.(nodeId, nodeType)
+            if (nodeType === 'Artist') expandRef.current?.(nodeId, nodeType)
           }}
           onClose={() => setShowPalette(false)}
         />
