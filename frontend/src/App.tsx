@@ -350,7 +350,6 @@ export function App() {
               handleNodeClick(contextMenu.nodeId, contextMenu.nodeType)
             }}
             onFocus={() => setSelectedNode(contextMenu.nodeId)}
-            onCopyId={() => {}}
             onHide={() => setHiddenNodes((prev) => new Set([...prev, contextMenu.nodeId]))}
             onClose={() => setContextMenu(null)}
           />

@@ -65,6 +65,26 @@ function darkHoverRenderer(
   context.fillText(data.label, rx + pad, data.y + size / 4)
 }
 
+/**
+ * Find a starting position for a new node near an already-placed neighbour,
+ * so freshly-added nodes don't all spawn at the origin and fly across the
+ * canvas during the layout pass. Returns null when no neighbour is placed yet.
+ */
+function seedPosition(
+  key: string,
+  edges: GraphData['edges'],
+  graph: Graph,
+): { x: number; y: number } | null {
+  for (const e of edges) {
+    const other = e.source === key ? e.target : e.target === key ? e.source : null
+    if (other && graph.hasNode(other)) {
+      const a = graph.getNodeAttributes(other)
+      return { x: a.x + (Math.random() - 0.5) * 2, y: a.y + (Math.random() - 0.5) * 2 }
+    }
+  }
+  return null
+}
+
 export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, onNodeRightClick }: Props) {
   const wrapperRef  = useRef<HTMLDivElement>(null)
   const sigmaRef    = useRef<Sigma | null>(null)
@@ -72,52 +92,27 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
   const selectedRef = useRef<string | null>(selectedNode)
   const hiddenRef   = useRef<Set<string>>(hiddenNodes)
 
+  // Keep latest callbacks in refs so the one-time renderer setup never
+  // needs re-subscription when a parent re-render changes their identity.
+  const onNodeClickRef      = useRef(onNodeClick)
+  const onNodeRightClickRef = useRef(onNodeRightClick)
+  onNodeClickRef.current      = onNodeClick
+  onNodeRightClickRef.current = onNodeRightClick
+
   // ----------------------------------------------------------------
-  // Build / rebuild when data changes
+  // Create the graph + Sigma renderer ONCE on mount.
+  //
+  // Data changes are applied incrementally (see the effect below) — we
+  // never kill and rebuild the WebGL context on every expand. That full
+  // teardown + 120-iteration relayout was the main source of interactive
+  // lag and the jarring full-graph reshuffle on each click.
   // ----------------------------------------------------------------
   useEffect(() => {
     const wrapper = wrapperRef.current
     if (!wrapper) return
 
-    sigmaRef.current?.kill()
-    sigmaRef.current = null
-
     const graph = new Graph({ multi: false, type: 'directed' })
     graphRef.current = graph
-
-    data.nodes.forEach((n) => {
-      if (graph.hasNode(n.key)) return
-      const { type: mbType, ...rest } = n.attributes as NodeAttributes & { type?: string }
-      graph.addNode(n.key, {
-        ...rest,
-        mbType,
-        type: 'circle',
-        x: typeof n.attributes.x === 'number' ? n.attributes.x : (Math.random() - 0.5) * 10,
-        y: typeof n.attributes.y === 'number' ? n.attributes.y : (Math.random() - 0.5) * 10,
-        size:  NODE_SIZES[n.attributes.nodeType as NodeType] ?? 8,
-        color: NODE_COLORS[n.attributes.nodeType as NodeType] ?? '#94a3b8',
-      })
-    })
-
-    data.edges.forEach((e) => {
-      if (!graph.hasNode(e.source) || !graph.hasNode(e.target) || graph.hasEdge(e.key)) return
-      try {
-        graph.addDirectedEdgeWithKey(e.key, e.source, e.target, {
-          ...e.attributes,
-          color: e.attributes.color ?? '#475569',
-          size: 2,
-        })
-      } catch { /* skip duplicate */ }
-    })
-
-    try {
-      forceAtlas2.assign(graph, {
-        iterations: 120,
-        settings: { gravity: 1, scalingRatio: 6, slowDown: 5 },
-      })
-    } catch (e) {
-      console.warn('FA2 skipped:', e)
-    }
 
     const renderer = new Sigma(graph, wrapper, {
       allowInvalidContainer: true,
@@ -129,7 +124,6 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       labelWeight: 'bold',
       labelRenderedSizeThreshold: 4,
       zIndex: true,
-      // Replace sigma's white hover box with our dark renderer
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       hoverRenderer: darkHoverRenderer as any,
       nodeReducer: (node, attrs) => {
@@ -154,9 +148,8 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
     sigmaRef.current = renderer
 
     // ----------------------------------------------------------------
-    // Drag — use sigma's downNode for hit-detection, then capture
-    // native mousemove events BEFORE sigma sees them (capture phase).
-    // stopPropagation() prevents sigma's MouseCaptor from panning.
+    // Drag — sigma's downNode for hit-detection, then capture native
+    // mousemove in the capture phase so sigma's camera doesn't pan.
     // ----------------------------------------------------------------
     let dragNode: string | null = null
     let didDrag = false
@@ -170,7 +163,6 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
     const onMouseMove = (e: MouseEvent) => {
       if (!dragNode) return
       didDrag = true
-      // Intercept before sigma's handler so camera doesn't pan
       e.stopPropagation()
       const rect = wrapper.getBoundingClientRect()
       const pos  = renderer.viewportToGraph({
@@ -186,29 +178,22 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       wrapper.style.cursor = 'default'
     }
 
-    // Register in capture phase so we fire before sigma's bubble-phase listeners
     wrapper.addEventListener('mousemove', onMouseMove, true)
     window.addEventListener('mouseup', onMouseUp)
 
-    // ----------------------------------------------------------------
-    // Click to select/expand  (skipped if a drag just occurred)
-    // ----------------------------------------------------------------
     renderer.on('clickNode', ({ node }) => {
       if (didDrag) { didDrag = false; return }
       const attrs = graph.getNodeAttributes(node)
-      onNodeClick(node, attrs.nodeType as NodeType)
+      onNodeClickRef.current(node, attrs.nodeType as NodeType)
     })
 
-    // ----------------------------------------------------------------
-    // Right-click context menu
-    // ----------------------------------------------------------------
     const onContextMenu = (e: MouseEvent) => e.preventDefault()
     wrapper.addEventListener('contextmenu', onContextMenu)
 
     renderer.on('rightClickNode', ({ node, event }) => {
       const attrs = graph.getNodeAttributes(node)
       const native = event.original as MouseEvent
-      onNodeRightClick(
+      onNodeRightClickRef.current(
         node,
         attrs.nodeType as NodeType,
         attrs.label as string,
@@ -224,15 +209,89 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       if (!dragNode) wrapper.style.cursor = 'default'
     })
 
-    setTimeout(() => renderer.refresh(), 60)
-
     return () => {
       wrapper.removeEventListener('mousemove', onMouseMove, true)
       wrapper.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('mouseup', onMouseUp)
       renderer.kill()
       sigmaRef.current = null
+      graphRef.current = null
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ----------------------------------------------------------------
+  // Incrementally sync `data` into the existing graph.
+  //
+  // Only new nodes/edges are added (seeded near an existing neighbour so
+  // they don't appear at the origin), and nodes no longer present are
+  // dropped. A short layout pass runs only when the structure changed —
+  // so re-selecting an already-loaded node costs nothing.
+  // ----------------------------------------------------------------
+  useEffect(() => {
+    const graph    = graphRef.current
+    const renderer = sigmaRef.current
+    if (!graph || !renderer) return
+
+    const wasEmpty     = graph.order === 0
+    const desiredNodes = new Set(data.nodes.map((n) => n.key))
+
+    // Drop nodes (and their edges) that are no longer present — e.g. after
+    // resetting to a brand-new artist graph.
+    const toRemove: string[] = []
+    graph.forEachNode((key) => { if (!desiredNodes.has(key)) toRemove.push(key) })
+    toRemove.forEach((key) => graph.dropNode(key))
+
+    // Add new nodes, seeding each near an already-positioned neighbour.
+    let addedNodes = 0
+    data.nodes.forEach((n) => {
+      if (graph.hasNode(n.key)) return
+      const { type: mbType, ...rest } = n.attributes as NodeAttributes & { type?: string }
+      const seed = seedPosition(n.key, data.edges, graph)
+      graph.addNode(n.key, {
+        ...rest,
+        mbType,
+        type: 'circle',
+        x: seed ? seed.x : (typeof n.attributes.x === 'number' ? n.attributes.x : (Math.random() - 0.5) * 10),
+        y: seed ? seed.y : (typeof n.attributes.y === 'number' ? n.attributes.y : (Math.random() - 0.5) * 10),
+        size:  NODE_SIZES[n.attributes.nodeType as NodeType] ?? 8,
+        color: NODE_COLORS[n.attributes.nodeType as NodeType] ?? '#94a3b8',
+      })
+      addedNodes++
+    })
+
+    // Add new edges (skip any whose endpoints aren't both present).
+    data.edges.forEach((e) => {
+      if (graph.hasEdge(e.key)) return
+      if (!graph.hasNode(e.source) || !graph.hasNode(e.target)) return
+      try {
+        graph.addDirectedEdgeWithKey(e.key, e.source, e.target, {
+          ...e.attributes,
+          color: e.attributes.color ?? '#475569',
+          size: 2,
+        })
+      } catch { /* skip duplicate */ }
+    })
+
+    const structureChanged = addedNodes > 0 || toRemove.length > 0
+
+    // Relayout only when the structure changed. Use a full relax for the
+    // first build (everything starts from random positions) and a brief
+    // pass for incremental additions (existing nodes are already settled,
+    // so few iterations are needed to place the new ones).
+    if (structureChanged) {
+      try {
+        forceAtlas2.assign(graph, {
+          iterations: wasEmpty ? 120 : 40,
+          settings: { gravity: 1, scalingRatio: 6, slowDown: 5 },
+        })
+      } catch (e) {
+        console.warn('FA2 skipped:', e)
+      }
+    }
+
+    renderer.refresh()
+    if (wasEmpty) setTimeout(() => fitGraph(), 80)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 

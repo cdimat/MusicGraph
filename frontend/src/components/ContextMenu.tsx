@@ -9,7 +9,6 @@ interface Props {
   nodeLabel: string
   onExpand: () => void
   onFocus: () => void
-  onCopyId: () => void
   onHide: () => void
   onClose: () => void
 }
@@ -24,7 +23,7 @@ interface Item {
 
 export function ContextMenu({
   x, y, nodeId, nodeLabel,
-  onExpand, onFocus, onCopyId, onHide, onClose,
+  onExpand, onFocus, onHide, onClose,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null)
 

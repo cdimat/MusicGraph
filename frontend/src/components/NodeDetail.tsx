@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { GeniusResult } from '../api/client'
 import { getGeniusTrack } from '../api/client'
 import type { GraphData, GraphEdge, GraphNode, NodeType } from '../types'
