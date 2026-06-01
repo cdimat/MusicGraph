@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react'
+import type { GeniusResult } from '../api/client'
+import { getGeniusTrack } from '../api/client'
 import type { GraphData, GraphEdge, GraphNode, NodeType } from '../types'
 import { NODE_COLORS } from '../types'
 
@@ -152,6 +155,107 @@ function ConnectionGroup({
   )
 }
 
+// ----------------------------------------------------------------
+// Genius metadata panel (lazy-loaded per track)
+// ----------------------------------------------------------------
+function GeniusPanel({ trackMbid }: { trackMbid: string }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [data, setData] = useState<GeniusResult | null>(null)
+
+  async function load() {
+    setState('loading')
+    try {
+      const result = await getGeniusTrack(trackMbid)
+      setData(result)
+      setState('done')
+    } catch {
+      setState('error')
+    }
+  }
+
+  if (state === 'idle') {
+    return (
+      <button
+        onClick={load}
+        className="mt-1 w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 text-gray-400 text-xs hover:bg-white/5 hover:text-white transition-colors"
+      >
+        <span className="text-yellow-400">♦</span>
+        Load Genius credits & description
+      </button>
+    )
+  }
+  if (state === 'loading') {
+    return <p className="text-gray-500 text-xs px-1 animate-pulse">Fetching from Genius…</p>
+  }
+  if (state === 'error') {
+    return <p className="text-red-400/70 text-xs px-1">Genius lookup failed (token may not be set).</p>
+  }
+  if (!data?.found) {
+    return <p className="text-gray-500 text-xs px-1">No Genius match found for this track.</p>
+  }
+
+  const { song, details } = data
+  return (
+    <div className="mt-2 space-y-3">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        {song?.thumbnail && (
+          <img src={song.thumbnail} alt="" className="w-10 h-10 rounded object-cover shrink-0" />
+        )}
+        <div className="min-w-0">
+          <a
+            href={song?.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-yellow-400 hover:text-yellow-300 text-xs font-semibold truncate block"
+          >
+            View on Genius ↗
+          </a>
+          {details?.release_date && (
+            <p className="text-gray-500 text-xs">{details.release_date}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Description */}
+      {details?.description && (
+        <p className="text-gray-400 text-xs leading-relaxed line-clamp-4">{details.description}</p>
+      )}
+
+      {/* Writers */}
+      {details && details.writers.length > 0 && (
+        <div>
+          <p className="text-gray-600 text-xs font-semibold uppercase tracking-wider mb-1">Written by</p>
+          <p className="text-gray-300 text-xs">{details.writers.join(', ')}</p>
+        </div>
+      )}
+
+      {/* Producers */}
+      {details && details.producers.length > 0 && (
+        <div>
+          <p className="text-gray-600 text-xs font-semibold uppercase tracking-wider mb-1">Produced by</p>
+          <p className="text-gray-300 text-xs">{details.producers.join(', ')}</p>
+        </div>
+      )}
+
+      {/* Additional credits */}
+      {details && details.credits.length > 0 && (
+        <div>
+          <p className="text-gray-600 text-xs font-semibold uppercase tracking-wider mb-1">Additional credits</p>
+          <ul className="space-y-0.5">
+            {details.credits.map((c, i) => (
+              <li key={i} className="text-xs flex gap-2">
+                <span className="text-gray-300 flex-1">{c.name}</span>
+                <span className="text-gray-500 shrink-0">{c.role}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function NodeDetail({ nodeId, graph, onExpand, onClose }: Props) {
   const node = graph.nodes.find((n) => n.key === nodeId)
   if (!node) return null
@@ -264,12 +368,22 @@ export function NodeDetail({ nodeId, graph, onExpand, onClose }: Props) {
       {/* Connections */}
       <div className="flex-1 overflow-y-auto p-4">
         {nodeType === 'Track' ? (
-          <TrackCredits
-            nodeId={nodeId}
-            connectedNodes={connectedNodes}
-            connectedEdges={connectedEdges}
-            onExpand={onExpand}
-          />
+          <>
+            <TrackCredits
+              nodeId={nodeId}
+              connectedNodes={connectedNodes}
+              connectedEdges={connectedEdges}
+              onExpand={onExpand}
+            />
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <p className="text-gray-500 text-xs font-semibold uppercase tracking-widest mb-2">Genius</p>
+              {a.mbid ? (
+                <GeniusPanel trackMbid={a.mbid} />
+              ) : (
+                <p className="text-gray-600 text-xs">No MBID available.</p>
+              )}
+            </div>
+          </>
         ) : connectedNodes.length === 0 ? (
           <p className="text-gray-500 text-sm">No connections loaded yet.</p>
         ) : (

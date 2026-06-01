@@ -40,6 +40,22 @@ export function getIngestStatus(jobId: string): Promise<IngestJob> {
   return request(`/api/ingest/status/${jobId}`)
 }
 
+export interface GeniusResult {
+  found: boolean
+  song?: { id: number; title: string; url: string; artist: string; thumbnail: string }
+  details?: {
+    description: string
+    release_date: string
+    writers: string[]
+    producers: string[]
+    credits: Array<{ name: string; role: string }>
+  }
+}
+
+export function getGeniusTrack(trackMbid: string): Promise<GeniusResult> {
+  return request(`/api/genius/track/${encodeURIComponent(trackMbid)}`)
+}
+
 /** Merge new nodes/edges into an existing graph without duplicating keys. */
 export function mergeGraphData(existing: GraphData, incoming: GraphData): GraphData {
   const nodeKeys = new Set(existing.nodes.map((n) => n.key))

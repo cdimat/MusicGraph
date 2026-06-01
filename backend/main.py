@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from graph.client import GraphClient
 from ingestion.discogs import DiscogsClient
+from ingestion.genius import GeniusClient
+from ingestion.mb_local import MusicBrainzLocalClient
 from ingestion.musicbrainz import MusicBrainzClient
 from ingestion.pipeline import IngestionPipeline
 
@@ -27,16 +29,33 @@ async def lifespan(app: FastAPI):
     discogs = DiscogsClient(settings.discogs_token)
     pipeline = IngestionPipeline(graph, mb, discogs)
 
-    app.state.graph = graph
-    app.state.mb = mb
-    app.state.discogs = discogs
+    genius: GeniusClient | None = None
+    if settings.genius_token:
+        genius = GeniusClient(settings.genius_token)
+        log.info("Genius API client ready.")
+    else:
+        log.info("GENIUS_TOKEN not set — Genius integration disabled.")
+
+    mb_local = MusicBrainzLocalClient(settings.postgres_uri) if settings.postgres_uri else None
+    if mb_local:
+        connected = mb_local.connect()
+        if not connected:
+            mb_local = None
+
+    app.state.graph    = graph
+    app.state.mb       = mb
+    app.state.mb_local = mb_local
+    app.state.discogs  = discogs
     app.state.pipeline = pipeline
+    app.state.genius   = genius
 
     log.info("MusicGraph backend ready.")
     yield
 
     # --- Shutdown ---
     await graph.close()
+    if mb_local:
+        mb_local.close()
     log.info("Neo4j connection closed.")
 
 

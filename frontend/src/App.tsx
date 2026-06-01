@@ -1,9 +1,11 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   expandNode,
   getArtistGraph,
   mergeGraphData,
 } from './api/client'
+import { CommandPalette } from './components/CommandPalette'
+import { ContextMenu } from './components/ContextMenu'
 import { GraphExplorer } from './components/GraphExplorer'
 import { LoadingOverlay } from './components/LoadingOverlay'
 import { NodeDetail } from './components/NodeDetail'
@@ -18,16 +20,45 @@ const EXPAND_LABEL: Partial<Record<NodeType, string>> = {
   Label:   'Loading label releases…',
 }
 
+interface ContextMenuState {
+  x: number
+  y: number
+  nodeId: string
+  nodeType: NodeType
+  nodeLabel: string
+}
+
 export function App() {
-  const [graphData, setGraphData] = useState<GraphData | null>(null)
+  const [graphData, setGraphData]     = useState<GraphData | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [loadingMsg, setLoadingMsg] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading]         = useState(false)
+  const [loadingMsg, setLoadingMsg]   = useState('')
+  const [error, setError]             = useState<string | null>(null)
   const [focusedArtist, setFocusedArtist] = useState<ArtistSearchResult | null>(null)
+  const [showPalette, setShowPalette] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [hiddenNodes, setHiddenNodes] = useState<Set<string>>(new Set())
 
   // Keep a ref so handleNodeClick never captures a stale handleExpand
   const expandRef = useRef<(id: string, type: string) => Promise<void>>()
+
+  // ----------------------------------------------------------------
+  // Cmd+K — open/close command palette
+  // ----------------------------------------------------------------
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowPalette((v) => !v)
+      }
+      if (e.key === 'Escape') {
+        setShowPalette(false)
+        setContextMenu(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // ----------------------------------------------------------------
   // Artist selected from search bar
@@ -72,17 +103,22 @@ export function App() {
 
   // ----------------------------------------------------------------
   // Node clicked in the graph
-  //
-  // Flow: Artist (already loaded) → click Release → auto-expand tracks
-  //       → click Track → auto-expand featured artists & credits
-  //       → click Artist → auto-expand their discography
   // ----------------------------------------------------------------
   const handleNodeClick = useCallback((nodeId: string, nodeType: NodeType) => {
     setSelectedNode(nodeId)
-
-    // Auto-expand all node types on click to show their neighbourhood.
+    setContextMenu(null)
     expandRef.current?.(nodeId, nodeType)
   }, [])
+
+  // ----------------------------------------------------------------
+  // Node right-clicked — show context menu
+  // ----------------------------------------------------------------
+  const handleNodeRightClick = useCallback(
+    (nodeId: string, nodeType: NodeType, nodeLabel: string, x: number, y: number) => {
+      setContextMenu({ x, y, nodeId, nodeType, nodeLabel })
+    },
+    [],
+  )
 
   // ----------------------------------------------------------------
   // Render
@@ -145,7 +181,9 @@ export function App() {
           <GraphExplorer
             data={graphData}
             selectedNode={selectedNode}
+            hiddenNodes={hiddenNodes}
             onNodeClick={handleNodeClick}
+            onNodeRightClick={handleNodeRightClick}
           />
         )}
 
@@ -183,7 +221,37 @@ export function App() {
             </button>
           </div>
         )}
+
+        {/* Context menu */}
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            nodeId={contextMenu.nodeId}
+            nodeType={contextMenu.nodeType}
+            nodeLabel={contextMenu.nodeLabel}
+            onExpand={() => {
+              handleNodeClick(contextMenu.nodeId, contextMenu.nodeType)
+            }}
+            onFocus={() => setSelectedNode(contextMenu.nodeId)}
+            onCopyId={() => {}}
+            onHide={() => setHiddenNodes((prev) => new Set([...prev, contextMenu.nodeId]))}
+            onClose={() => setContextMenu(null)}
+          />
+        )}
       </main>
+
+      {/* Cmd+K command palette */}
+      {showPalette && (
+        <CommandPalette
+          graph={graphData}
+          onSelect={(nodeId, nodeType) => {
+            setSelectedNode(nodeId)
+            expandRef.current?.(nodeId, nodeType)
+          }}
+          onClose={() => setShowPalette(false)}
+        />
+      )}
     </div>
   )
 }

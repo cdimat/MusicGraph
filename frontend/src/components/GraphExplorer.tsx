@@ -15,7 +15,9 @@ const NODE_SIZES: Record<NodeType, number> = {
 interface Props {
   data: GraphData
   selectedNode: string | null
+  hiddenNodes: Set<string>
   onNodeClick: (nodeId: string, nodeType: NodeType) => void
+  onNodeRightClick: (nodeId: string, nodeType: NodeType, nodeLabel: string, x: number, y: number) => void
 }
 
 /**
@@ -63,11 +65,12 @@ function darkHoverRenderer(
   context.fillText(data.label, rx + pad, data.y + size / 4)
 }
 
-export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
+export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, onNodeRightClick }: Props) {
   const wrapperRef  = useRef<HTMLDivElement>(null)
   const sigmaRef    = useRef<Sigma | null>(null)
   const graphRef    = useRef<Graph | null>(null)
   const selectedRef = useRef<string | null>(selectedNode)
+  const hiddenRef   = useRef<Set<string>>(hiddenNodes)
 
   // ----------------------------------------------------------------
   // Build / rebuild when data changes
@@ -130,6 +133,7 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       hoverRenderer: darkHoverRenderer as any,
       nodeReducer: (node, attrs) => {
+        if (hiddenRef.current.has(node)) return { ...attrs, hidden: true }
         const isSelected = node === selectedRef.current
         return {
           ...attrs,
@@ -137,7 +141,7 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
           size:   isSelected ? attrs.size * 1.5 : attrs.size,
           zIndex: isSelected ? 2 : 0,
           color:  selectedRef.current && !isSelected
-            ? attrs.color + '80'    // dim non-selected nodes to ~50% opacity
+            ? attrs.color + '80'
             : attrs.color,
         }
       },
@@ -195,6 +199,24 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
       onNodeClick(node, attrs.nodeType as NodeType)
     })
 
+    // ----------------------------------------------------------------
+    // Right-click context menu
+    // ----------------------------------------------------------------
+    const onContextMenu = (e: MouseEvent) => e.preventDefault()
+    wrapper.addEventListener('contextmenu', onContextMenu)
+
+    renderer.on('rightClickNode', ({ node, event }) => {
+      const attrs = graph.getNodeAttributes(node)
+      const native = event.original as MouseEvent
+      onNodeRightClick(
+        node,
+        attrs.nodeType as NodeType,
+        attrs.label as string,
+        native.clientX,
+        native.clientY,
+      )
+    })
+
     renderer.on('enterNode', () => {
       if (!dragNode) wrapper.style.cursor = 'grab'
     })
@@ -206,6 +228,7 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
 
     return () => {
       wrapper.removeEventListener('mousemove', onMouseMove, true)
+      wrapper.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('mouseup', onMouseUp)
       renderer.kill()
       sigmaRef.current = null
@@ -230,10 +253,32 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
   }, [selectedNode])
 
   // ----------------------------------------------------------------
+  // Sync hidden nodes without full rebuild
+  // ----------------------------------------------------------------
+  useEffect(() => {
+    hiddenRef.current = hiddenNodes
+    sigmaRef.current?.refresh()
+  }, [hiddenNodes])
+
+  // ----------------------------------------------------------------
   // Camera controls
   // ----------------------------------------------------------------
   function zoomIn()  { sigmaRef.current?.getCamera().animatedZoom({ duration: 250 }) }
   function zoomOut() { sigmaRef.current?.getCamera().animatedUnzoom({ duration: 250 }) }
+
+  function cleanLayout() {
+    const graph = graphRef.current
+    const renderer = sigmaRef.current
+    if (!graph || !renderer) return
+    try {
+      forceAtlas2.assign(graph, {
+        iterations: 200,
+        settings: { gravity: 1.2, scalingRatio: 8, slowDown: 8 },
+      })
+    } catch { /* skip if graph is empty */ }
+    renderer.refresh()
+    setTimeout(() => fitGraph(), 120)
+  }
 
   function fitGraph() {
     const graph    = graphRef.current
@@ -258,12 +303,13 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
       {/* Sigma canvas */}
       <div ref={wrapperRef} style={{ position: 'absolute', inset: 0 }} />
 
-      {/* Zoom / fit controls — bottom right */}
+      {/* Zoom / fit / layout controls — bottom right */}
       <div className="absolute bottom-5 right-5 flex flex-col gap-1.5 z-10">
         {([
-          { label: '+', title: 'Zoom in',   fn: zoomIn   },
-          { label: '−', title: 'Zoom out',  fn: zoomOut  },
-          { label: '⊙', title: 'Fit graph', fn: fitGraph },
+          { label: '+',  title: 'Zoom in',      fn: zoomIn      },
+          { label: '−',  title: 'Zoom out',     fn: zoomOut     },
+          { label: '⊙',  title: 'Fit graph',    fn: fitGraph    },
+          { label: '⟳',  title: 'Clean layout', fn: cleanLayout },
         ] as const).map(({ label, title, fn }) => (
           <button
             key={label}
@@ -297,9 +343,9 @@ export function GraphExplorer({ data, selectedNode, onNodeClick }: Props) {
       {/* Usage hints — fade out once a node is selected */}
       {!selectedNode && (
         <div className="absolute top-4 right-4 text-gray-600 text-xs text-right pointer-events-none select-none leading-relaxed">
-          <p>Click node to expand</p>
-          <p>Drag node to reposition</p>
-          <p>Scroll to zoom · Drag canvas to pan</p>
+          <p>Click node to expand · Right-click for options</p>
+          <p>Drag node to reposition · ⟳ to re-run layout</p>
+          <p>Scroll to zoom · Drag canvas to pan · ⌘K to search</p>
         </div>
       )}
     </div>

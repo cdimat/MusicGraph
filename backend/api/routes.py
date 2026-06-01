@@ -23,7 +23,20 @@ async def search_artists(
     q: str = Query(..., min_length=2, description="Artist name query"),
     limit: int = Query(10, le=25),
 ):
-    """Search MusicBrainz for artists matching `q`."""
+    """Search artists.
+
+    Uses the local MusicBrainz PostgreSQL dump when available (fast,
+    no rate limit), falling back to the live MusicBrainz API.
+    """
+    mb_local = request.app.state.mb_local
+    if mb_local and mb_local.available:
+        try:
+            results = await asyncio.to_thread(mb_local.search_artists, q, limit)
+            if results:
+                return results
+        except Exception:
+            pass  # fall through to API
+
     mb = request.app.state.mb
     try:
         results = await asyncio.to_thread(mb.search_artists, q, limit)
@@ -142,3 +155,44 @@ async def ingestion_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# ------------------------------------------------------------------
+# Genius metadata
+# ------------------------------------------------------------------
+
+@router.get("/genius/track/{track_mbid}")
+async def get_genius_track(track_mbid: str, request: Request):
+    """Fetch Genius song metadata for a Track node.
+
+    Returns song description, writers, producers, and Genius URL.
+    Results are cached — repeated calls are instant.
+    """
+    genius = request.app.state.genius
+    if not genius:
+        raise HTTPException(status_code=503, detail="Genius API not configured (set GENIUS_TOKEN in .env)")
+
+    graph = request.app.state.graph
+    track_info = await graph.get_track_info(track_mbid)
+    if not track_info or not track_info.get("title"):
+        raise HTTPException(status_code=404, detail="Track not found in graph")
+
+    song = await asyncio.to_thread(
+        genius.search_song,
+        track_info["title"],
+        track_info.get("artist_name", ""),
+    )
+    if not song:
+        return {"found": False}
+
+    details = await asyncio.to_thread(genius.get_song_details, song["id"])
+    return {"found": True, "song": song, "details": details}
+
+
+@router.get("/system/status")
+async def system_status(request: Request):
+    """Return which optional integrations are active."""
+    return {
+        "genius":   request.app.state.genius is not None,
+        "mb_local": getattr(request.app.state, "mb_local", None) is not None,
+    }

@@ -213,6 +213,26 @@ class GraphClient:
                 "artist_name": record["artist_name"] or "",
             }
 
+    async def get_track_info(self, track_mbid: str) -> dict | None:
+        """Return track title and the name of a credited artist (for Genius lookup)."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (t:Track {mbid: $mbid})
+                OPTIONAL MATCH (a:Artist)-[:PLAYED_ON]->(t)
+                RETURN t.title AS title, a.name AS artist_name
+                LIMIT 1
+                """,
+                mbid=track_mbid,
+            )
+            record = await result.single()
+            if not record:
+                return None
+            return {
+                "title":       record["title"],
+                "artist_name": record["artist_name"] or "",
+            }
+
     async def merge_collaboration(self, mbid_a: str, mbid_b: str, context: str = "") -> None:
         async with self._driver.session() as session:
             await session.run(
