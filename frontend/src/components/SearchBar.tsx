@@ -42,7 +42,7 @@ export function SearchBar({ onSelect }: Props) {
 
   return (
     <div className="relative w-full max-w-xl">
-      <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus-within:border-indigo-500 transition-colors">
+      <div className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-3 focus-within:border-amber-800 transition-colors">
         <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
             d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
@@ -58,7 +58,7 @@ export function SearchBar({ onSelect }: Props) {
           autoFocus
         />
         {loading && (
-          <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
+          <span className="w-4 h-4 border-2 border-amber-700 border-t-transparent rounded-full animate-spin shrink-0" />
         )}
       </div>
 
@@ -71,7 +71,7 @@ export function SearchBar({ onSelect }: Props) {
                 className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors flex items-center gap-3"
               >
                 <span className={`shrink-0 w-2 h-2 rounded-full ${
-                  a.type === 'Group' ? 'bg-emerald-400' : 'bg-indigo-400'
+                  a.type === 'Group' ? 'bg-amber-500' : 'bg-amber-700'
                 }`} />
                 <span className="flex-1 min-w-0">
                   <span className="text-white font-medium truncate block">{a.name}</span>

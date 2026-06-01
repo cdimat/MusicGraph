@@ -6,7 +6,75 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #030712; /* gray-950 */
+  background-color: #070504;
   color: #f1f5f9;
   font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ------------------------------------------------------------------ */
+/* Vinyl record rotation                                                */
+/* ------------------------------------------------------------------ */
+@keyframes vinyl-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.vinyl-spin {
+  animation: vinyl-spin 12s linear infinite;
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------------ */
+/* Subtle film-grain overlay on the landing page                        */
+/* Applied via a ::before pseudo-element on .grain                     */
+/* ------------------------------------------------------------------ */
+.grain::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='250'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='250' height='250' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* ------------------------------------------------------------------ */
+/* Warm radial ambient glow — sits behind the vinyl                    */
+/* ------------------------------------------------------------------ */
+.ambient-glow {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 65% 55% at 50% 40%,
+    rgba(180, 83, 9, 0.09) 0%,
+    rgba(120, 53, 15, 0.04) 45%,
+    transparent 75%
+  );
+}
+
+/* Faint outer vignette to push the edges dark */
+.vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 100% 100% at 50% 50%,
+    transparent 50%,
+    rgba(4, 3, 2, 0.6) 100%
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Hairline separator dots between feature chips                        */
+/* ------------------------------------------------------------------ */
+.chip-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #44403c;
+  vertical-align: middle;
+  flex-shrink: 0;
 }

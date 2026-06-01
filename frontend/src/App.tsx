@@ -13,6 +13,75 @@ import { SearchBar } from './components/SearchBar'
 import type { ArtistSearchResult, GraphData, NodeType } from './types'
 
 
+// ----------------------------------------------------------------
+// Vinyl record hero illustration
+// ----------------------------------------------------------------
+function VinylRecord() {
+  const grooves = [92, 86, 80, 74, 68, 62, 56, 50, 44, 38, 33]
+  return (
+    <svg viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', height: '100%' }}>
+      <defs>
+        <radialGradient id="discGrad" cx="42%" cy="38%" r="65%">
+          <stop offset="0%"   stopColor="#1c1107" />
+          <stop offset="60%"  stopColor="#0e0b06" />
+          <stop offset="100%" stopColor="#080604" />
+        </radialGradient>
+        <radialGradient id="labelGrad" cx="45%" cy="40%" r="60%">
+          <stop offset="0%"   stopColor="#c05621" />
+          <stop offset="100%" stopColor="#7c2d12" />
+        </radialGradient>
+        <radialGradient id="sheen" cx="35%" cy="30%" r="50%">
+          <stop offset="0%"  stopColor="white" stopOpacity="0.04" />
+          <stop offset="100%" stopColor="white" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+
+      {/* Disc body */}
+      <circle cx="100" cy="100" r="99" fill="#0b0806" />
+      <circle cx="100" cy="100" r="97" fill="url(#discGrad)" />
+
+      {/* Groove rings */}
+      {grooves.map((r, i) => (
+        <circle
+          key={r}
+          cx="100" cy="100" r={r}
+          stroke="#2a1d0c"
+          strokeWidth={i % 4 === 0 ? 0.7 : 0.35}
+          opacity={i % 4 === 0 ? 0.9 : 0.55}
+        />
+      ))}
+
+      {/* Surface sheen — light catching the vinyl at an angle */}
+      <ellipse cx="72" cy="62" rx="28" ry="14"
+        fill="white" fillOpacity="0.025"
+        transform="rotate(-35 72 62)" />
+      <ellipse cx="136" cy="148" rx="16" ry="7"
+        fill="white" fillOpacity="0.015"
+        transform="rotate(-35 136 148)" />
+
+      {/* Centre label */}
+      <circle cx="100" cy="100" r="26" fill="#7c2d12" />
+      <circle cx="100" cy="100" r="24" fill="url(#labelGrad)" />
+      <circle cx="100" cy="100" r="21" stroke="#9a3412" strokeWidth="0.5" />
+
+      {/* Label text */}
+      <text x="100" y="96" textAnchor="middle"
+        fill="#f97316" fillOpacity="0.45"
+        fontSize="3.8" fontFamily="Georgia, serif" letterSpacing="1.5">
+        MUSICGRAPH
+      </text>
+      <text x="100" y="104" textAnchor="middle"
+        fill="#c2410c" fillOpacity="0.5"
+        fontSize="3" fontFamily="Georgia, serif" letterSpacing="0.8">
+        ℗ 2025
+      </text>
+
+      {/* Centre spindle hole */}
+      <circle cx="100" cy="100" r="3.2" fill="#070504" />
+    </svg>
+  )
+}
+
 const EXPAND_LABEL: Partial<Record<NodeType, string>> = {
   Release: 'Loading tracks & credits…',
   Track:   'Loading featured artists…',
@@ -126,12 +195,12 @@ export function App() {
   return (
     <div className="relative w-full h-full flex flex-col">
       {/* Top bar */}
-      <header className="relative z-10 flex items-center gap-4 px-4 py-3 border-b border-white/10 bg-gray-950/80 backdrop-blur-sm">
+      <header className="relative z-10 flex items-center gap-4 px-4 py-3 border-b border-white/[0.07] bg-[#070504]/90 backdrop-blur-sm">
         <button
           onClick={() => { setGraphData(null); setSelectedNode(null); setFocusedArtist(null) }}
           className="shrink-0 flex items-center gap-2 text-white font-bold text-lg hover:opacity-80 transition-opacity"
         >
-          <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <circle cx="12" cy="12" r="3" strokeWidth={2} />
             <circle cx="4"  cy="6"  r="2" strokeWidth={2} />
             <circle cx="20" cy="6"  r="2" strokeWidth={2} />
@@ -154,7 +223,7 @@ export function App() {
             <span>{graphData.nodes.length} nodes</span>
             <span>{graphData.edges.length} edges</span>
             {focusedArtist && (
-              <span className="text-indigo-400 font-medium">{focusedArtist.name}</span>
+              <span className="text-amber-600 font-medium">{focusedArtist.name}</span>
             )}
           </span>
         )}
@@ -164,15 +233,57 @@ export function App() {
       <main className="relative flex-1 overflow-hidden">
         {/* Landing / search page */}
         {!graphData && !loading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
-            <div className="text-center">
-              <h1 className="text-4xl font-bold text-white mb-2">Artist Graph Explorer</h1>
-              <p className="text-gray-400 text-lg max-w-md">
-                Search any artist or band. Click nodes to traverse the full chain:
-                Artist → Album → Song → Credits → Artist.
+          <div className="grain absolute inset-0 flex flex-col items-center justify-center px-4 overflow-hidden">
+            {/* Background layers */}
+            <div className="ambient-glow" />
+            <div className="vignette" />
+
+            {/* All content sits above background layers */}
+            <div className="relative z-10 flex flex-col items-center">
+
+              {/* Vinyl record hero */}
+              <div className="vinyl-spin mb-10" style={{ width: 172, height: 172 }}>
+                <VinylRecord />
+              </div>
+
+              {/* Eyebrow label */}
+              <p className="text-amber-800 text-xs font-semibold tracking-[0.22em] uppercase mb-4 select-none">
+                A Music Discovery Engine
               </p>
+
+              {/* Headline */}
+              <h1 className="text-white text-5xl font-bold text-center tracking-tight mb-4 leading-none">
+                Artist Graph Explorer
+              </h1>
+
+              {/* Subline */}
+              <p className="text-stone-500 text-[15px] text-center max-w-xs leading-relaxed mb-9">
+                Drop in any artist. Follow the threads — albums, collaborators, credits,
+                and the labels behind the music.
+              </p>
+
+              {/* Search bar */}
+              <div className="w-full" style={{ maxWidth: 440 }}>
+                <SearchBar onSelect={handleArtistSelect} />
+              </div>
+
+              {/* Feature chips */}
+              <div className="flex items-center gap-3 mt-7 select-none">
+                {['Artist Graphs', 'Track Credits', 'Record Labels', 'Genius Lyrics'].map((f, i, arr) => (
+                  <span key={f} className="flex items-center gap-3">
+                    <span className="text-stone-600 text-xs">{f}</span>
+                    {i < arr.length - 1 && <span className="chip-dot" />}
+                  </span>
+                ))}
+              </div>
+
+              {/* Keyboard hint */}
+              <p className="mt-5 text-stone-700 text-xs select-none">
+                <kbd className="font-mono bg-stone-900 border border-stone-800 px-1.5 py-0.5 rounded text-stone-600">⌘K</kbd>
+                <span className="ml-2">to search within a loaded graph</span>
+              </p>
+
             </div>
-            <SearchBar onSelect={handleArtistSelect} />
           </div>
         )}
 
@@ -193,7 +304,7 @@ export function App() {
               <p className="text-gray-400 text-lg">No graph data found.</p>
               <button
                 onClick={() => setGraphData(null)}
-                className="mt-4 text-indigo-400 underline hover:no-underline"
+                className="mt-4 text-amber-600 underline hover:no-underline"
               >
                 Back to search
               </button>
