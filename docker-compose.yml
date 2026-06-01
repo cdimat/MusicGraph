@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   neo4j:
     image: neo4j:5
@@ -33,7 +31,9 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - api_cache:/app/data   # persists MB + Discogs API response cache across restarts
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   neo4j_data:
+  api_cache:

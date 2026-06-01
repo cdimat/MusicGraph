@@ -1,13 +1,18 @@
 """MusicBrainz API client wrapping musicbrainzngs.
 
-Rate limit: 1 req/sec unauthenticated. All methods include the required sleep.
+All responses are cached to disk (see ingestion/cache.py) so re-ingestion
+after a Docker restart is near-instant — no API round-trips for data already
+fetched.
+
+Rate limit: 1 req/sec unauthenticated.
 """
 
-import asyncio
 import time
 from typing import Any
 
 import musicbrainzngs
+
+from ingestion import cache
 
 
 class MusicBrainzClient:
@@ -27,6 +32,7 @@ class MusicBrainzClient:
     # ------------------------------------------------------------------
 
     def search_artists(self, query: str, limit: int = 10) -> list[dict]:
+        """Search is NOT cached — we always want fresh search results."""
         self._throttle()
         result = musicbrainzngs.search_artists(artist=query, limit=limit)
         return [
@@ -43,6 +49,11 @@ class MusicBrainzClient:
         ]
 
     def get_artist(self, mbid: str) -> dict:
+        cache_key = f"mb:artist:{mbid}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
         self._throttle()
         result = musicbrainzngs.get_artist_by_id(
             mbid,
@@ -91,6 +102,7 @@ class MusicBrainzClient:
             else:
                 artist["related_artists"].append(entry)
 
+        cache.set(cache_key, artist)
         return artist
 
     # ------------------------------------------------------------------
@@ -98,6 +110,11 @@ class MusicBrainzClient:
     # ------------------------------------------------------------------
 
     def get_release_group_releases(self, rg_mbid: str) -> list[dict]:
+        cache_key = f"mb:rg:{rg_mbid}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
         self._throttle()
         result = musicbrainzngs.get_release_group_by_id(
             rg_mbid, includes=["artists", "releases"]
@@ -113,20 +130,73 @@ class MusicBrainzClient:
                     "type": result["release-group"].get("type", ""),
                 }
             )
+
+        cache.set(cache_key, releases)
         return releases
 
     def get_release_tracks(self, release_mbid: str) -> list[dict]:
+        cache_key = f"mb:tracks:{release_mbid}"
+        cached = cache.get(cache_key)
+        # Invalidate old cache entries that predate the artist_credits field
+        if cached and cached and "artist_credits" in (cached[0] if cached else {}):
+            return cached
+
         self._throttle()
         result = musicbrainzngs.get_release_by_id(
-            release_mbid, includes=["recordings", "recording-rels", "isrcs", "artist-credits"]
+            release_mbid,
+            includes=["recordings", "isrcs", "artist-credits"],
         )
+
         tracks = []
-        for medium in result.get("release", {}).get("medium-list", []):
-            for track in medium.get("track-list", []):
+        medium_list = result.get("release", {}).get("medium-list", [])
+        # Defensively handle both list and dict-wrapped forms from the API
+        if isinstance(medium_list, dict):
+            medium_list = medium_list.get("medium", [])
+
+        for medium in medium_list:
+            if not isinstance(medium, dict):
+                continue
+            track_list = medium.get("track-list", [])
+            if isinstance(track_list, dict):
+                track_list = track_list.get("track", [])
+
+            for track in track_list:
+                if not isinstance(track, dict):
+                    continue
                 rec = track.get("recording", {})
+                # recording is sometimes just the ID string
+                if isinstance(rec, str):
+                    rec = {"id": rec}
+                if not isinstance(rec, dict):
+                    rec = {}
+
+                # ISRCs come back as plain strings ["US-UM7-11-00043"],
+                # not as dicts — guard against both forms
                 isrc = ""
-                if rec.get("isrc-list"):
-                    isrc = rec["isrc-list"][0].get("id", "")
+                isrc_list = rec.get("isrc-list", [])
+                if isrc_list:
+                    first = isrc_list[0]
+                    isrc = first if isinstance(first, str) else first.get("id", "")
+
+                # Extract artist credits (main + featured) from the recording.
+                # artist-credit entries are dicts like:
+                #   {"artist": {"id": "...", "name": "..."}, "joinphrase": " feat. "}
+                # Plain strings (join phrases) are filtered out.
+                artist_credits = []
+                for ac in rec.get("artist-credit", []):
+                    if not isinstance(ac, dict):
+                        continue
+                    a = ac.get("artist", {})
+                    if not isinstance(a, dict) or not a.get("id"):
+                        continue
+                    artist_credits.append({
+                        "mbid": a["id"],
+                        "name": a.get("name", ""),
+                        "sort_name": a.get("sort-name", a.get("name", "")),
+                        # joinphrase on the *previous* credit indicates this one is featured
+                        "role": "Featured" if artist_credits else "Primary",
+                    })
+
                 tracks.append(
                     {
                         "mbid": rec.get("id", track.get("id", "")),
@@ -134,8 +204,11 @@ class MusicBrainzClient:
                         "position": track.get("position", ""),
                         "duration": rec.get("length"),
                         "isrc": isrc,
+                        "artist_credits": artist_credits,
                     }
                 )
+
+        cache.set(cache_key, tracks)
         return tracks
 
     # ------------------------------------------------------------------

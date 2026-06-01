@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Sigma Test</title>
+  <style>
+    body { margin: 0; background: #030712; }
+    #container { position: absolute; inset: 0; }
+    #status { position: fixed; top: 10px; left: 10px; color: white; font: 14px monospace; z-index: 100; }
+  </style>
+</head>
+<body>
+  <div id="status">Loading...</div>
+  <div id="container"></div>
+
+  <script type="module">
+    const status = document.getElementById('status');
+    const container = document.getElementById('container');
+
+    try {
+      status.textContent = 'Importing modules...';
+
+      // Import the built versions from node_modules via Vite
+      const { default: Graph } = await import('/node_modules/graphology/dist/graphology.esm.js')
+        .catch(() => import('/node_modules/graphology/src/graph.js'));
+
+      status.textContent = 'Graph imported. Creating...';
+
+      const graph = new Graph({ multi: false, type: 'directed' });
+      const artists = ['Radiohead', 'Thom Yorke', 'Jonny Greenwood', 'Colin Greenwood', 'Ed O\'Brien', 'Philip Selway'];
+      const albums = ['OK Computer', 'Kid A', 'Amnesiac', 'Hail to the Thief'];
+
+      artists.forEach((a, i) => {
+        const angle = (2 * Math.PI * i) / artists.length;
+        graph.addNode(a, { x: Math.cos(angle) * 3, y: Math.sin(angle) * 3, size: 12, color: '#6366f1', label: a });
+      });
+      albums.forEach((a, i) => {
+        const angle = (2 * Math.PI * i) / albums.length;
+        graph.addNode(a, { x: Math.cos(angle) * 6, y: Math.sin(angle) * 6, size: 8, color: '#10b981', label: a });
+        graph.addEdge('Radiohead', a, { color: '#84cc16', size: 1 });
+      });
+      graph.addEdge('Thom Yorke', 'Radiohead', { color: '#8b5cf6', size: 1 });
+      graph.addEdge('Jonny Greenwood', 'Radiohead', { color: '#8b5cf6', size: 1 });
+
+      status.textContent = `Graph: ${graph.order} nodes, ${graph.size} edges. Creating Sigma...`;
+
+      const { Sigma } = await import('/node_modules/sigma/sigma.js');
+      const sigma = new Sigma(graph, container, {
+        allowInvalidContainer: true,
+        defaultNodeColor: '#6366f1',
+        defaultEdgeColor: '#334155',
+        labelColor: { color: '#e2e8f0' },
+        labelSize: 14,
+        labelWeight: '500',
+        zIndex: true,
+      });
+
+      status.textContent = `✅ Sigma OK! Container: ${container.clientWidth}x${container.clientHeight}`;
+
+    } catch(e) {
+      status.textContent = '❌ Error: ' + e.message;
+      status.style.color = '#f87171';
+      console.error(e);
+    }
+  </script>
+</body>
+</html>

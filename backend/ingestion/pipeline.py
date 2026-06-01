@@ -244,6 +244,86 @@ class IngestionPipeline:
                     artist_mbid, track["mbid"], role, instrument
                 )
 
+    # ------------------------------------------------------------------
+    # On-demand track ingestion (called when a Release node is expanded)
+    # ------------------------------------------------------------------
+
+    async def ingest_release_tracks(
+        self,
+        release_mbid: str,
+        progress_cb: Callable[[str], None] | None = None,
+    ) -> None:
+        """Fetch and store tracks for a single release, plus Discogs credits.
+
+        Called lazily when the user expands a Release node in the graph.
+        Cached API responses make repeated calls near-instant.
+        """
+        def emit(msg: str) -> None:
+            log.info(msg)
+            if progress_cb:
+                progress_cb(msg)
+
+        emit(f"[MB] Fetching tracks for release {release_mbid}")
+        try:
+            tracks = await asyncio.to_thread(self.mb.get_release_tracks, release_mbid)
+        except Exception as exc:
+            log.warning("Could not fetch tracks for %s: %s", release_mbid, exc)
+            return
+
+        for track in tracks[:MAX_TRACKS_PER_RELEASE]:
+            await self.graph.merge_track(track, release_mbid)
+
+            # Store MusicBrainz artist credits (main artist + featured artists)
+            # This runs without a Discogs token and gives us the core Artist→Track links
+            for ac in track.get("artist_credits", []):
+                if not ac.get("mbid"):
+                    continue
+                await self.graph.merge_artist({
+                    "mbid": ac["mbid"],
+                    "name": ac["name"],
+                    "sort_name": ac.get("sort_name", ac["name"]),
+                    "type": "Person",
+                    "country": "",
+                    "disambiguation": "",
+                    "begin_year": None,
+                    "end_year": None,
+                })
+                await self.graph.merge_musician_credit(
+                    ac["mbid"], track["mbid"],
+                    role=ac.get("role", "Primary"),
+                    instrument="",
+                )
+
+        emit(f"  Stored {len(tracks)} tracks for {release_mbid}")
+
+        # Try to enrich with Discogs musician credits
+        # Look up the release title + artist from Neo4j first
+        release_data = await self.graph.get_release_info(release_mbid)
+        if release_data and release_data.get("title"):
+            artist_name = release_data.get("artist_name", "")
+            year = release_data.get("year")
+            emit(f"  [Discogs] Searching credits for '{release_data['title']}'")
+            d_release = await asyncio.to_thread(
+                self.discogs.find_release,
+                release_data["title"],
+                artist_name,
+                year,
+            )
+            if d_release:
+                for lbl in d_release.get("labels", []):
+                    if lbl.get("name"):
+                        await self.graph.merge_label(
+                            {
+                                "mbid": f"discogs:label:{lbl['discogs_id']}",
+                                "name": lbl["name"],
+                                "discogs_id": lbl.get("discogs_id"),
+                            },
+                            release_mbid,
+                        )
+                for credit in d_release.get("credits", []):
+                    await self._ingest_credit(credit, release_mbid, tracks)
+                emit(f"  [Discogs] Merged {len(d_release.get('credits', []))} credits")
+
     @staticmethod
     def _extract_instrument(role: str) -> str:
         """Pull instrument name from Discogs role string like 'Guitar [Lead]'."""

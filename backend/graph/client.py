@@ -158,13 +158,68 @@ class GraphClient:
                 instrument=instrument,
             )
 
+    async def has_releases_for_artist(self, artist_mbid: str) -> bool:
+        """True if the artist has at least one release already ingested."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                "MATCH (:Artist {mbid: $mbid})-[:CREDITED_ON]->(:Release) RETURN count(*) AS n",
+                mbid=artist_mbid,
+            )
+            record = await result.single()
+            return bool(record and record["n"] > 0)
+
+    async def has_tracks_for_release(self, release_mbid: str) -> bool:
+        """True only if the release has tracks AND at least one track has artist credits."""
+        async with self._driver.session() as session:
+            # Check tracks exist
+            r1 = await session.run(
+                "MATCH (:Release {mbid: $mbid})-[:CONTAINS]->(:Track) RETURN count(*) AS n",
+                mbid=release_mbid,
+            )
+            rec1 = await r1.single()
+            if not rec1 or rec1["n"] == 0:
+                return False
+
+            # Check at least one PLAYED_ON credit exists for those tracks
+            r2 = await session.run(
+                """
+                MATCH (:Release {mbid: $mbid})-[:CONTAINS]->(t:Track)
+                WHERE ()-[:PLAYED_ON]->(t)
+                RETURN count(t) AS n
+                """,
+                mbid=release_mbid,
+            )
+            rec2 = await r2.single()
+            return bool(rec2 and rec2["n"] > 0)
+
+    async def get_release_info(self, release_mbid: str) -> dict | None:
+        """Return release title/year plus the primary credited artist name."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (r:Release {mbid: $mbid})
+                OPTIONAL MATCH (a:Artist)-[:CREDITED_ON]->(r)
+                RETURN r.title AS title, r.year AS year, a.name AS artist_name
+                LIMIT 1
+                """,
+                mbid=release_mbid,
+            )
+            record = await result.single()
+            if not record:
+                return None
+            return {
+                "title": record["title"],
+                "year": record["year"],
+                "artist_name": record["artist_name"] or "",
+            }
+
     async def merge_collaboration(self, mbid_a: str, mbid_b: str, context: str = "") -> None:
         async with self._driver.session() as session:
             await session.run(
                 """
                 MATCH (a:Artist {mbid: $mbid_a})
                 MATCH (b:Artist {mbid: $mbid_b})
-                MERGE (a)-[r:COLLABORATED_WITH]-(b)
+                MERGE (a)-[r:COLLABORATED_WITH]->(b)
                 SET r.context = $context
                 """,
                 mbid_a=mbid_a,
@@ -177,42 +232,139 @@ class GraphClient:
     # ------------------------------------------------------------------
 
     async def get_graph_for_artist(self, mbid: str) -> dict:
+        """Return the 1-hop neighbourhood of an artist as a Sigma-ready payload."""
         async with self._driver.session() as session:
-            result = await session.run(
+            # Check artist exists
+            check = await session.run(
+                "MATCH (a:Artist {mbid: $mbid}) RETURN a", mbid=mbid
+            )
+            center_record = await check.single()
+            if not center_record:
+                return {"nodes": [], "edges": []}
+
+            center_node = center_record["a"]
+
+            # Fetch all direct neighbours as individual rows (avoids collect() map issues)
+            nbr_result = await session.run(
                 """
-                MATCH (center:Artist {mbid: $mbid})
-                OPTIONAL MATCH (center)-[r1]-(neighbor)
-                OPTIONAL MATCH (neighbor)-[r2]-(second)
-                  WHERE second <> center AND (second:Artist OR second:Label)
-                WITH center,
-                     collect(DISTINCT {rel: r1, node: neighbor}) AS tier1,
-                     collect(DISTINCT {rel: r2, node: second}) AS tier2
-                RETURN center, tier1, tier2
+                MATCH (center:Artist {mbid: $mbid})-[r]-(neighbor)
+                RETURN r, neighbor, type(r) AS rel_type,
+                       startNode(r).mbid AS src_mbid,
+                       endNode(r).mbid   AS tgt_mbid
                 """,
                 mbid=mbid,
             )
-            record = await result.single()
-            if not record:
-                return {"nodes": [], "edges": []}
-            return self._build_graph_payload(record["center"], record["tier1"], record["tier2"])
+            rows = [record async for record in nbr_result]
+
+        nodes: dict[str, dict] = {}
+        edges: dict[str, dict] = {}
+
+        center_key = dict(center_node).get("mbid") or str(center_node.element_id)
+        center_sigma = self._node_to_sigma(center_node, 0.0, 0.0)
+        nodes[center_key] = center_sigma
+
+        count = max(len(rows), 1)
+        for i, row in enumerate(rows):
+            neighbor = row["neighbor"]
+            if neighbor is None:
+                continue
+
+            angle = (2 * math.pi * i) / count
+            n = self._node_to_sigma(neighbor, angle, radius=3.0)
+            nodes.setdefault(n["key"], n)
+
+            rel_type = row["rel_type"]
+            # Use explicit startNode/endNode MBIDs to avoid rel.nodes[] issues
+            src_mbid = row["src_mbid"] or center_key
+            tgt_mbid = row["tgt_mbid"] or n["key"]
+            # Normalise so both endpoints are in our node set
+            src_id = src_mbid if src_mbid in nodes else center_key
+            tgt_id = tgt_mbid if tgt_mbid in nodes else n["key"]
+
+            edge_key = f"{src_id}__{rel_type}__{tgt_id}"
+            if edge_key not in edges:
+                edges[edge_key] = self._build_edge(
+                    edge_key, src_id, tgt_id, rel_type, row["r"]
+                )
+
+        return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
     async def get_neighborhood(self, node_id: str, node_label: str) -> dict:
+        """Expand one node — return its direct neighbours."""
         async with self._driver.session() as session:
-            result = await session.run(
+            check = await session.run(
+                f"MATCH (n:{node_label} {{mbid: $node_id}}) RETURN n",
+                node_id=node_id,
+            )
+            center_record = await check.single()
+            if not center_record:
+                return {"nodes": [], "edges": []}
+
+            center_node = center_record["n"]
+
+            nbr_result = await session.run(
                 f"""
                 MATCH (n:{node_label} {{mbid: $node_id}})-[r]-(neighbor)
-                RETURN n, collect(DISTINCT {{rel: r, node: neighbor}}) AS neighbors
+                RETURN r, neighbor, type(r) AS rel_type,
+                       startNode(r).mbid AS src_mbid,
+                       endNode(r).mbid   AS tgt_mbid
                 """,
                 node_id=node_id,
             )
-            record = await result.single()
-            if not record:
-                return {"nodes": [], "edges": []}
-            return self._build_graph_payload(record["n"], record["neighbors"], [])
+            rows = [record async for record in nbr_result]
+
+        nodes: dict[str, dict] = {}
+        edges: dict[str, dict] = {}
+
+        center_key = dict(center_node).get("mbid") or str(center_node.element_id)
+        nodes[center_key] = self._node_to_sigma(center_node, 0.0, 0.0)
+
+        count = max(len(rows), 1)
+        for i, row in enumerate(rows):
+            neighbor = row["neighbor"]
+            if neighbor is None:
+                continue
+            angle = (2 * math.pi * i) / count
+            n = self._node_to_sigma(neighbor, angle, radius=3.0)
+            nodes.setdefault(n["key"], n)
+
+            rel_type = row["rel_type"]
+            src_mbid = row["src_mbid"] or center_key
+            tgt_mbid = row["tgt_mbid"] or n["key"]
+            src_id = src_mbid if src_mbid in nodes else center_key
+            tgt_id = tgt_mbid if tgt_mbid in nodes else n["key"]
+
+            edge_key = f"{src_id}__{rel_type}__{tgt_id}"
+            if edge_key not in edges:
+                edges[edge_key] = self._build_edge(
+                    edge_key, src_id, tgt_id, rel_type, row["r"]
+                )
+
+        return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _build_edge(
+        self,
+        key: str,
+        src: str,
+        tgt: str,
+        rel_type: str,
+        rel: Any,
+    ) -> dict:
+        attrs: dict[str, Any] = {
+            "relType": rel_type,
+            "label": rel_type.replace("_", " ").title(),
+            "color": EDGE_COLORS.get(rel_type, "#64748b"),
+            "size": 1,
+        }
+        rel_props = dict(rel) if rel is not None else {}
+        for prop in ("role", "instrument", "context"):
+            if rel_props.get(prop):
+                attrs[prop] = rel_props[prop]
+        return {"key": key, "source": src, "target": tgt, "attributes": attrs}
 
     def _node_to_sigma(self, node: Any, angle: float = 0.0, radius: float = 1.0) -> dict:
         labels = list(node.labels)
@@ -231,68 +383,3 @@ class GraphClient:
             },
         }
 
-    def _build_graph_payload(
-        self, center_node: Any, tier1: list, tier2: list
-    ) -> dict:
-        nodes: dict[str, dict] = {}
-        edges: dict[str, dict] = {}
-
-        center_sigma = self._node_to_sigma(center_node, 0, 0)
-        nodes[center_sigma["key"]] = center_sigma
-
-        t1_count = len(tier1)
-        for i, entry in enumerate(tier1):
-            if entry["node"] is None:
-                continue
-            angle = (2 * math.pi * i) / max(t1_count, 1)
-            n = self._node_to_sigma(entry["node"], angle, radius=3)
-            nodes.setdefault(n["key"], n)
-
-            rel = entry["rel"]
-            if rel is not None:
-                src_id = nodes[center_sigma["key"]]["key"]
-                tgt_id = n["key"]
-                rel_type = rel.type
-                edge_key = f"{src_id}__{rel_type}__{tgt_id}"
-                if edge_key not in edges:
-                    edges[edge_key] = {
-                        "key": edge_key,
-                        "source": src_id,
-                        "target": tgt_id,
-                        "attributes": {
-                            "relType": rel_type,
-                            "label": rel_type.replace("_", " ").title(),
-                            "color": EDGE_COLORS.get(rel_type, "#64748b"),
-                            "size": 1,
-                            **{k: v for k, v in dict(rel).items()},
-                        },
-                    }
-
-        t2_count = len(tier2)
-        for i, entry in enumerate(tier2):
-            if entry["node"] is None:
-                continue
-            angle = (2 * math.pi * i) / max(t2_count, 1)
-            n = self._node_to_sigma(entry["node"], angle, radius=6)
-            nodes.setdefault(n["key"], n)
-
-            rel = entry["rel"]
-            if rel is not None:
-                start_id = dict(rel.nodes[0]).get("mbid") or str(rel.nodes[0].element_id)
-                end_id = dict(rel.nodes[1]).get("mbid") or str(rel.nodes[1].element_id)
-                rel_type = rel.type
-                edge_key = f"{start_id}__{rel_type}__{end_id}"
-                if edge_key not in edges and start_id in nodes and end_id in nodes:
-                    edges[edge_key] = {
-                        "key": edge_key,
-                        "source": start_id,
-                        "target": end_id,
-                        "attributes": {
-                            "relType": rel_type,
-                            "label": rel_type.replace("_", " ").title(),
-                            "color": EDGE_COLORS.get(rel_type, "#64748b"),
-                            "size": 1,
-                        },
-                    }
-
-        return {"nodes": list(nodes.values()), "edges": list(edges.values())}

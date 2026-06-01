@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   expandNode,
   getArtistGraph,
@@ -10,14 +10,12 @@ import { NodeDetail } from './components/NodeDetail'
 import { SearchBar } from './components/SearchBar'
 import type { ArtistSearchResult, GraphData, NodeType } from './types'
 
-// Legend entry
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-gray-400">
-      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
-      {label}
-    </span>
-  )
+
+const EXPAND_LABEL: Partial<Record<NodeType, string>> = {
+  Release: 'Loading tracks & credits…',
+  Track:   'Loading featured artists…',
+  Artist:  'Expanding artist connections…',
+  Label:   'Loading label releases…',
 }
 
 export function App() {
@@ -28,8 +26,11 @@ export function App() {
   const [error, setError] = useState<string | null>(null)
   const [focusedArtist, setFocusedArtist] = useState<ArtistSearchResult | null>(null)
 
+  // Keep a ref so handleNodeClick never captures a stale handleExpand
+  const expandRef = useRef<(id: string, type: string) => Promise<void>>()
+
   // ----------------------------------------------------------------
-  // Artist selected from search
+  // Artist selected from search bar
   // ----------------------------------------------------------------
   async function handleArtistSelect(artist: ArtistSearchResult) {
     setError(null)
@@ -49,23 +50,15 @@ export function App() {
   }
 
   // ----------------------------------------------------------------
-  // Node clicked in graph
-  // ----------------------------------------------------------------
-  const handleNodeClick = useCallback((nodeId: string, _nodeType: NodeType) => {
-    setSelectedNode(nodeId)
-  }, [])
-
-  // ----------------------------------------------------------------
-  // Expand a node (from NodeDetail sidebar or double-click)
+  // Expand a node — merges new nodes/edges into the existing graph
   // ----------------------------------------------------------------
   const handleExpand = useCallback(
     async (nodeId: string, nodeType: string) => {
-      if (!graphData) return
       setLoading(true)
-      setLoadingMsg(`Expanding ${nodeType} connections…`)
+      setLoadingMsg(EXPAND_LABEL[nodeType as NodeType] ?? `Expanding ${nodeType}…`)
       try {
         const expansion = await expandNode(nodeId, nodeType)
-        setGraphData((prev) => mergeGraphData(prev!, expansion))
+        setGraphData((prev) => prev ? mergeGraphData(prev, expansion) : expansion)
         setSelectedNode(nodeId)
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Expand failed')
@@ -73,8 +66,23 @@ export function App() {
         setLoading(false)
       }
     },
-    [graphData],
+    [],
   )
+  expandRef.current = handleExpand
+
+  // ----------------------------------------------------------------
+  // Node clicked in the graph
+  //
+  // Flow: Artist (already loaded) → click Release → auto-expand tracks
+  //       → click Track → auto-expand featured artists & credits
+  //       → click Artist → auto-expand their discography
+  // ----------------------------------------------------------------
+  const handleNodeClick = useCallback((nodeId: string, nodeType: NodeType) => {
+    setSelectedNode(nodeId)
+
+    // Auto-expand all node types on click to show their neighbourhood.
+    expandRef.current?.(nodeId, nodeType)
+  }, [])
 
   // ----------------------------------------------------------------
   // Render
@@ -83,7 +91,6 @@ export function App() {
     <div className="relative w-full h-full flex flex-col">
       {/* Top bar */}
       <header className="relative z-10 flex items-center gap-4 px-4 py-3 border-b border-white/10 bg-gray-950/80 backdrop-blur-sm">
-        {/* Logo */}
         <button
           onClick={() => { setGraphData(null); setSelectedNode(null); setFocusedArtist(null) }}
           className="shrink-0 flex items-center gap-2 text-white font-bold text-lg hover:opacity-80 transition-opacity"
@@ -102,12 +109,10 @@ export function App() {
           <span className="hidden sm:inline">MusicGraph</span>
         </button>
 
-        {/* Search */}
         <div className="flex-1 max-w-xl">
           <SearchBar onSelect={handleArtistSelect} />
         </div>
 
-        {/* Stats */}
         {graphData && (
           <span className="hidden md:flex items-center gap-3 text-xs text-gray-500">
             <span>{graphData.nodes.length} nodes</span>
@@ -121,28 +126,22 @@ export function App() {
 
       {/* Main area */}
       <main className="relative flex-1 overflow-hidden">
+        {/* Landing / search page */}
         {!graphData && !loading && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
             <div className="text-center">
               <h1 className="text-4xl font-bold text-white mb-2">Artist Graph Explorer</h1>
               <p className="text-gray-400 text-lg max-w-md">
-                Search any artist or band to explore their connections — collaborators,
-                band members, releases, and musician credits from MusicBrainz + Discogs.
+                Search any artist or band. Click nodes to traverse the full chain:
+                Artist → Album → Song → Credits → Artist.
               </p>
             </div>
-
             <SearchBar onSelect={handleArtistSelect} />
-
-            <div className="flex flex-wrap justify-center gap-4 mt-4">
-              <LegendDot color="#6366f1" label="Artist / Band" />
-              <LegendDot color="#10b981" label="Release" />
-              <LegendDot color="#f59e0b" label="Track" />
-              <LegendDot color="#ef4444" label="Label" />
-            </div>
           </div>
         )}
 
-        {graphData && (
+        {/* Graph canvas */}
+        {graphData && graphData.nodes.length > 0 && (
           <GraphExplorer
             data={graphData}
             selectedNode={selectedNode}
@@ -150,6 +149,21 @@ export function App() {
           />
         )}
 
+        {graphData && graphData.nodes.length === 0 && !loading && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-gray-400 text-lg">No graph data found.</p>
+              <button
+                onClick={() => setGraphData(null)}
+                className="mt-4 text-indigo-400 underline hover:no-underline"
+              >
+                Back to search
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Node detail sidebar */}
         {selectedNode && graphData && (
           <NodeDetail
             nodeId={selectedNode}
@@ -164,10 +178,7 @@ export function App() {
         {error && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-red-900/80 border border-red-500/50 text-red-200 px-4 py-2 rounded-lg text-sm max-w-sm text-center">
             {error}
-            <button
-              onClick={() => setError(null)}
-              className="ml-2 underline hover:no-underline"
-            >
+            <button onClick={() => setError(null)} className="ml-2 underline hover:no-underline">
               Dismiss
             </button>
           </div>

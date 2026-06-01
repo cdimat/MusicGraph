@@ -66,17 +66,34 @@ class ExpandRequest(BaseModel):
 async def expand_node(body: ExpandRequest, request: Request):
     """Expand a node's immediate neighbourhood.
 
-    For Artist nodes not yet ingested, triggers a depth-1 ingestion first.
+    - Artist: triggers depth-1 ingestion if not yet in graph.
+    - Release: lazily fetches tracks + Discogs credits if not yet stored.
     """
     graph = request.app.state.graph
     pipeline = request.app.state.pipeline
 
-    data = await graph.get_neighborhood(body.node_id, body.node_type)
-    if not data["nodes"] and body.node_type == "Artist":
-        try:
-            await pipeline.ingest_artist(body.node_id, depth=1)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}")
+    if body.node_type == "Artist":
+        # Ingest if not yet fully ingested (node exists but has no releases)
+        has_releases = await graph.has_releases_for_artist(body.node_id)
+        if not has_releases:
+            try:
+                await pipeline.ingest_artist(body.node_id, depth=1)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Ingestion failed: {exc}")
+        data = await graph.get_neighborhood(body.node_id, body.node_type)
+
+    elif body.node_type == "Release":
+        # Lazily ingest tracks the first time a Release is expanded
+        has_tracks = await graph.has_tracks_for_release(body.node_id)
+        if not has_tracks:
+            try:
+                await pipeline.ingest_release_tracks(body.node_id)
+            except Exception as exc:
+                # Non-fatal — return whatever we have
+                pass
+        data = await graph.get_neighborhood(body.node_id, body.node_type)
+
+    else:
         data = await graph.get_neighborhood(body.node_id, body.node_type)
 
     return data
