@@ -365,6 +365,23 @@ export function NodeDetail({ nodeId, graph, onExpand, onClose }: Props) {
         )}
       </div>
 
+      {/* Expand action — explicit affordance (same as double-clicking the node) */}
+      <div className="px-4 pt-3">
+        <button
+          onClick={() => onExpand(nodeId, nodeType)}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-700/20 border border-amber-700/40 text-amber-300 text-sm font-medium hover:bg-amber-700/30 transition-colors"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <circle cx="8" cy="8" r="2.5" />
+            <circle cx="2" cy="4" r="1.5" /><circle cx="14" cy="4" r="1.5" />
+            <circle cx="2" cy="12" r="1.5" /><circle cx="14" cy="12" r="1.5" />
+            <line x1="8" y1="5.5" x2="3" y2="5" /><line x1="8" y1="5.5" x2="13" y2="5" />
+            <line x1="8" y1="10.5" x2="3" y2="11" /><line x1="8" y1="10.5" x2="13" y2="11" />
+          </svg>
+          Expand connections
+        </button>
+      </div>
+
       {/* Connections */}
       <div className="flex-1 overflow-y-auto p-4">
         {nodeType === 'Track' ? (

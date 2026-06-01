@@ -123,6 +123,7 @@ export function App() {
       if (e.key === 'Escape') {
         setShowPalette(false)
         setContextMenu(null)
+        setSelectedNode(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -185,6 +186,14 @@ export function App() {
     if (nodeType === 'Artist') {
       expandRef.current?.(nodeId, nodeType)
     }
+  }, [])
+
+  // Double-click expands any node's connections — the universal "show more"
+  // gesture (single click on a non-artist only selects it).
+  const handleNodeDoubleClick = useCallback((nodeId: string, nodeType: NodeType) => {
+    setContextMenu(null)
+    setSelectedNode(nodeId)
+    expandRef.current?.(nodeId, nodeType)
   }, [])
 
   // ----------------------------------------------------------------
@@ -307,7 +316,9 @@ export function App() {
             selectedNode={selectedNode}
             hiddenNodes={hiddenNodes}
             onNodeClick={handleNodeClick}
+            onNodeDoubleClick={handleNodeDoubleClick}
             onNodeRightClick={handleNodeRightClick}
+            onBackgroundClick={() => { setSelectedNode(null); setContextMenu(null) }}
           />
         )}
 

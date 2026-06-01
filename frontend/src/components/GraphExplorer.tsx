@@ -17,7 +17,9 @@ interface Props {
   selectedNode: string | null
   hiddenNodes: Set<string>
   onNodeClick: (nodeId: string, nodeType: NodeType) => void
+  onNodeDoubleClick: (nodeId: string, nodeType: NodeType) => void
   onNodeRightClick: (nodeId: string, nodeType: NodeType, nodeLabel: string, x: number, y: number) => void
+  onBackgroundClick: () => void
 }
 
 /**
@@ -85,19 +87,40 @@ function seedPosition(
   return null
 }
 
-export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, onNodeRightClick }: Props) {
+export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, onNodeDoubleClick, onNodeRightClick, onBackgroundClick }: Props) {
   const wrapperRef  = useRef<HTMLDivElement>(null)
   const sigmaRef    = useRef<Sigma | null>(null)
   const graphRef    = useRef<Graph | null>(null)
   const selectedRef = useRef<string | null>(selectedNode)
   const hiddenRef   = useRef<Set<string>>(hiddenNodes)
 
+  // Focus = the node the user is hovering, or (when not hovering) the
+  // selected node. We pre-compute its 1-hop neighbour set so the render
+  // reducers can spotlight the local neighbourhood with O(1) lookups.
+  const hoveredRef  = useRef<string | null>(null)
+  const neighborRef = useRef<Set<string>>(new Set())
+
   // Keep latest callbacks in refs so the one-time renderer setup never
   // needs re-subscription when a parent re-render changes their identity.
-  const onNodeClickRef      = useRef(onNodeClick)
-  const onNodeRightClickRef = useRef(onNodeRightClick)
-  onNodeClickRef.current      = onNodeClick
-  onNodeRightClickRef.current = onNodeRightClick
+  const onNodeClickRef        = useRef(onNodeClick)
+  const onNodeDoubleClickRef  = useRef(onNodeDoubleClick)
+  const onNodeRightClickRef   = useRef(onNodeRightClick)
+  const onBackgroundClickRef  = useRef(onBackgroundClick)
+  onNodeClickRef.current       = onNodeClick
+  onNodeDoubleClickRef.current = onNodeDoubleClick
+  onNodeRightClickRef.current  = onNodeRightClick
+  onBackgroundClickRef.current = onBackgroundClick
+
+  // Recompute the highlighted neighbourhood for a focus node and repaint.
+  function focusNeighborhood(nodeId: string | null) {
+    const graph = graphRef.current
+    const next = new Set<string>()
+    if (graph && nodeId && graph.hasNode(nodeId)) {
+      graph.forEachNeighbor(nodeId, (nb) => next.add(nb))
+    }
+    neighborRef.current = next
+    sigmaRef.current?.refresh()
+  }
 
   // ----------------------------------------------------------------
   // Create the graph + Sigma renderer ONCE on mount.
@@ -128,22 +151,41 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       hoverRenderer: darkHoverRenderer as any,
       nodeReducer: (node, attrs) => {
         if (hiddenRef.current.has(node)) return { ...attrs, hidden: true }
-        const isSelected = node === selectedRef.current
+
+        // Focus: hovered node wins, else the selected node.
+        const focus = hoveredRef.current ?? selectedRef.current
+        if (!focus) {
+          // No focus — everything at rest.
+          return { ...attrs, highlighted: false }
+        }
+
+        const isFocus       = node === focus
+        const inNeighborhood = isFocus || neighborRef.current.has(node)
+        if (inNeighborhood) {
+          return {
+            ...attrs,
+            highlighted: isFocus,
+            size:   isFocus ? attrs.size * 1.5 : attrs.size * 1.15,
+            zIndex: isFocus ? 2 : 1,
+          }
+        }
+        // Outside the neighbourhood — dim and drop the label to declutter.
         return {
           ...attrs,
-          highlighted: isSelected,
-          size:   isSelected ? attrs.size * 1.5 : attrs.size,
-          zIndex: isSelected ? 2 : 0,
-          color:  selectedRef.current && !isSelected
-            ? attrs.color + '80'
-            : attrs.color,
+          label: '',
+          color: attrs.color + '1f', // ~12% opacity
+          zIndex: 0,
         }
       },
-      edgeReducer: (_edge, attrs) => ({
-        ...attrs,
-        size:  selectedRef.current ? 1 : 2,
-        color: selectedRef.current ? '#1e293b' : attrs.color,
-      }),
+      edgeReducer: (edge, attrs) => {
+        const focus = hoveredRef.current ?? selectedRef.current
+        if (!focus) return { ...attrs, size: 2 }
+        // Highlight only edges touching the focus node.
+        const touches = graph.hasExtremity(edge, focus)
+        return touches
+          ? { ...attrs, size: 3, zIndex: 1 }
+          : { ...attrs, size: 1, color: '#1a140d', zIndex: 0 }
+      },
     })
     sigmaRef.current = renderer
 
@@ -187,6 +229,17 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       onNodeClickRef.current(node, attrs.nodeType as NodeType)
     })
 
+    // Double-click expands ANY node's connections — the natural gesture for
+    // "show me more". preventSigmaDefault stops sigma's built-in zoom.
+    renderer.on('doubleClickNode', ({ node, event }) => {
+      event.preventSigmaDefault()
+      const attrs = graph.getNodeAttributes(node)
+      onNodeDoubleClickRef.current(node, attrs.nodeType as NodeType)
+    })
+
+    // Clicking empty canvas clears the current selection / spotlight.
+    renderer.on('clickStage', () => onBackgroundClickRef.current())
+
     const onContextMenu = (e: MouseEvent) => e.preventDefault()
     wrapper.addEventListener('contextmenu', onContextMenu)
 
@@ -202,11 +255,18 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       )
     })
 
-    renderer.on('enterNode', () => {
-      if (!dragNode) wrapper.style.cursor = 'grab'
+    renderer.on('enterNode', ({ node }) => {
+      if (dragNode) return
+      wrapper.style.cursor = 'pointer'
+      hoveredRef.current = node
+      focusNeighborhood(node)
     })
     renderer.on('leaveNode', () => {
-      if (!dragNode) wrapper.style.cursor = 'default'
+      if (dragNode) return
+      wrapper.style.cursor = 'default'
+      hoveredRef.current = null
+      // Fall back to the selected node's neighbourhood (if any).
+      focusNeighborhood(selectedRef.current)
     })
 
     return () => {
@@ -290,24 +350,34 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       }
     }
 
-    renderer.refresh()
+    // Recompute the spotlight — expanding a node adds new neighbours.
+    focusNeighborhood(hoveredRef.current ?? selectedRef.current)
+
     if (wasEmpty) setTimeout(() => fitGraph(), 80)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
   // ----------------------------------------------------------------
-  // Sync selected node highlight without full rebuild
+  // Sync selected node highlight + spotlight its neighbourhood
   // ----------------------------------------------------------------
   useEffect(() => {
     selectedRef.current = selectedNode
     const renderer = sigmaRef.current
-    if (!renderer) return
-    renderer.refresh()
-
     const graph = graphRef.current
+    if (!renderer) return
+
+    // Spotlight the selection's neighbourhood (no-op repaint if nothing hovered).
+    if (!hoveredRef.current) focusNeighborhood(selectedNode)
+    else renderer.refresh()
+
+    // Gently pan to center the node, preserving the current zoom level so
+    // the view doesn't lurch in/out on every click. Only zoom in if the
+    // user is currently very zoomed out.
     if (selectedNode && graph?.hasNode(selectedNode)) {
       const { x, y } = graph.getNodeAttributes(selectedNode)
-      renderer.getCamera().animate({ x, y, ratio: 0.5 }, { duration: 400 })
+      const cam = renderer.getCamera()
+      const ratio = Math.min(cam.ratio, 0.7)
+      cam.animate({ x, y, ratio }, { duration: 350 })
     }
   }, [selectedNode])
 
@@ -402,9 +472,9 @@ export function GraphExplorer({ data, selectedNode, hiddenNodes, onNodeClick, on
       {/* Usage hints — fade out once a node is selected */}
       {!selectedNode && (
         <div className="absolute top-4 right-4 text-gray-600 text-xs text-right pointer-events-none select-none leading-relaxed">
-          <p>Click artist to expand · Right-click any node for options</p>
-          <p>Drag node to reposition · ⟳ to re-run layout</p>
-          <p>Scroll to zoom · Drag canvas to pan · ⌘K to search</p>
+          <p>Click to select · Double-click to expand</p>
+          <p>Hover to spotlight connections · Right-click for options</p>
+          <p>Scroll to zoom · Drag to pan · ⌘K to search</p>
         </div>
       )}
     </div>
