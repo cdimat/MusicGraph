@@ -26,9 +26,13 @@ class MusicBrainzLocalClient:
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """Open connection; return True on success."""
+        """Open connection; return True on success.
+
+        Uses a 5-second connect_timeout so a slow or not-yet-ready
+        PostgreSQL container does not block the backend startup thread.
+        """
         try:
-            self._conn = psycopg2.connect(self._dsn)
+            self._conn = psycopg2.connect(self._dsn, connect_timeout=5)
             self._conn.autocommit = True
             log.info("Connected to local MB PostgreSQL database.")
             return True

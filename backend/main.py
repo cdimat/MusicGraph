@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -38,7 +39,9 @@ async def lifespan(app: FastAPI):
 
     mb_local = MusicBrainzLocalClient(settings.postgres_uri) if settings.postgres_uri else None
     if mb_local:
-        connected = mb_local.connect()
+        # Run blocking psycopg2 connect off the event loop so a slow
+        # PostgreSQL startup never hangs the whole backend.
+        connected = await asyncio.to_thread(mb_local.connect)
         if not connected:
             mb_local = None
 
