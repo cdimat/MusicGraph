@@ -214,9 +214,14 @@ export function App() {
           <span className="hidden sm:inline">MusicGraph</span>
         </button>
 
-        <div className="flex-1 max-w-xl">
-          <SearchBar onSelect={handleArtistSelect} />
-        </div>
+        {/* Only show header search bar once a graph is loaded.
+            On the landing page the hero SearchBar is the primary entry point
+            — rendering both simultaneously causes autoFocus conflicts. */}
+        {graphData && (
+          <div className="flex-1 max-w-xl">
+            <SearchBar onSelect={handleArtistSelect} />
+          </div>
+        )}
 
         {graphData && (
           <span className="hidden md:flex items-center gap-3 text-xs text-gray-500">
