@@ -12,8 +12,18 @@ Set up:
 import logging
 from typing import Any
 
-import psycopg2
-import psycopg2.extras
+# psycopg2 is an optional dependency — the local MB dump is a performance
+# enhancement, not a hard requirement. If the driver isn't installed (e.g.
+# the image hasn't been rebuilt since it was added to requirements), we
+# degrade gracefully to the live MusicBrainz API instead of crashing the
+# entire backend on import.
+try:
+    import psycopg2
+    import psycopg2.extras
+    _PSYCOPG2_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    psycopg2 = None  # type: ignore[assignment]
+    _PSYCOPG2_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +41,13 @@ class MusicBrainzLocalClient:
         Uses a 5-second connect_timeout so a slow or not-yet-ready
         PostgreSQL container does not block the backend startup thread.
         """
+        if not _PSYCOPG2_AVAILABLE:
+            log.warning(
+                "psycopg2 not installed — local MB DB disabled, using live API. "
+                "Rebuild the backend image to enable it: docker compose up -d --build backend"
+            )
+            self._conn = None
+            return False
         try:
             self._conn = psycopg2.connect(self._dsn, connect_timeout=5)
             self._conn.autocommit = True
