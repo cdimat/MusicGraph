@@ -28,7 +28,6 @@ async def lifespan(app: FastAPI):
 
     mb = MusicBrainzClient(settings.musicbrainz_app)
     discogs = DiscogsClient(settings.discogs_token)
-    pipeline = IngestionPipeline(graph, mb, discogs)
 
     genius: GeniusClient | None = None
     if settings.genius_token:
@@ -44,6 +43,9 @@ async def lifespan(app: FastAPI):
         connected = await asyncio.to_thread(mb_local.connect)
         if not connected:
             mb_local = None
+
+    # Pipeline prefers the local MB dump (when imported) for release/track reads.
+    pipeline = IngestionPipeline(graph, mb, discogs, mb_local=mb_local)
 
     app.state.graph    = graph
     app.state.mb       = mb

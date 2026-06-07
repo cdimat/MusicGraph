@@ -33,10 +33,40 @@ class IngestionPipeline:
         graph: GraphClient,
         mb: MusicBrainzClient,
         discogs: DiscogsClient,
+        mb_local=None,
     ) -> None:
         self.graph = graph
         self.mb = mb
         self.discogs = discogs
+        # Optional local MusicBrainz dump (scripts/import_mb_dump.py). When
+        # present and populated, it serves the high-volume release/track reads
+        # locally instead of the rate-limited live API.
+        self.mb_local = mb_local
+
+    # ------------------------------------------------------------------
+    # Local-first read helpers (fall back to the live MB API)
+    # ------------------------------------------------------------------
+
+    def _local_ready(self) -> bool:
+        return bool(self.mb_local and self.mb_local.available)
+
+    async def _get_release_group_releases(self, rg_mbid: str) -> list[dict]:
+        if self._local_ready():
+            local = await asyncio.to_thread(
+                self.mb_local.get_release_group_releases, rg_mbid
+            )
+            if local:
+                return local
+        return await asyncio.to_thread(self.mb.get_release_group_releases, rg_mbid)
+
+    async def _get_release_tracks(self, release_mbid: str) -> list[dict]:
+        if self._local_ready():
+            local = await asyncio.to_thread(
+                self.mb_local.get_release_tracks, release_mbid
+            )
+            if local:
+                return local
+        return await asyncio.to_thread(self.mb.get_release_tracks, release_mbid)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -130,9 +160,7 @@ class IngestionPipeline:
         for rg in rg_list:
             emit(f"[MB] Fetching release group: {rg['title']}")
             try:
-                releases = await asyncio.to_thread(
-                    self.mb.get_release_group_releases, rg["mbid"]
-                )
+                releases = await self._get_release_group_releases(rg["mbid"])
             except Exception as exc:
                 log.warning("Could not fetch release group %s: %s", rg["mbid"], exc)
                 continue
@@ -145,11 +173,9 @@ class IngestionPipeline:
                 if depth < 2:
                     continue
 
-                # Tracks from MusicBrainz
+                # Tracks from MusicBrainz (local dump first, then live API)
                 try:
-                    tracks = await asyncio.to_thread(
-                        self.mb.get_release_tracks, release["mbid"]
-                    )
+                    tracks = await self._get_release_tracks(release["mbid"])
                 except Exception as exc:
                     log.warning("Could not fetch tracks for %s: %s", release["mbid"], exc)
                     tracks = []
@@ -265,7 +291,7 @@ class IngestionPipeline:
 
         emit(f"[MB] Fetching tracks for release {release_mbid}")
         try:
-            tracks = await asyncio.to_thread(self.mb.get_release_tracks, release_mbid)
+            tracks = await self._get_release_tracks(release_mbid)
         except Exception as exc:
             log.warning("Could not fetch tracks for %s: %s", release_mbid, exc)
             return
@@ -295,6 +321,19 @@ class IngestionPipeline:
                 )
 
         emit(f"  Stored {len(tracks)} tracks for {release_mbid}")
+
+        # Record labels straight from the local MB dump — gives us Label nodes
+        # even without a Discogs token.
+        if self._local_ready():
+            labels = await asyncio.to_thread(self.mb_local.get_release_labels, release_mbid)
+            for lbl in labels:
+                if lbl.get("name"):
+                    await self.graph.merge_label(
+                        {"mbid": lbl["mbid"], "name": lbl["name"], "discogs_id": None},
+                        release_mbid,
+                    )
+            if labels:
+                emit(f"  [MB-local] Merged {len(labels)} label(s)")
 
         # Try to enrich with Discogs musician credits
         # Look up the release title + artist from Neo4j first
